@@ -154,16 +154,15 @@ def register_handlers(client):
 
             if is_youtube:
                 try:
-                    # 配置yt-dlp
                     ydl_opts = {
                         "format": YT_FORMAT,
                         "outtmpl": os.path.join(
-                            YOUTUBE_TEMP_DIR, "%(title)s-%(id)s.%(ext)s"
+                            YOUTUBE_TEMP_DIR, "%(title).100s-%(id)s.%(ext)s"
                         ),
-                        # 忽略错误，继续下载
                         "ignoreerrors": True,
-                        # 忽略下载错误，继续下载播放列表中的其他视频
                         "ignore_no_formats_error": True,
+                        "restrictfilenames": True,  # 使用ASCII字符
+                        "windowsfilenames": True,  # 确保Windows兼容性
                     }
 
                     # 添加代理配置
@@ -198,14 +197,13 @@ def register_handlers(client):
                         temp_cookie_file = f.name
                         ydl_opts["cookiefile"] = temp_cookie_file
 
-                    # 首先获取视频信息
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(message_text, download=False)
-
                     # 判断是否是播放列表
-                    is_playlist = "entries" in info
+                    is_playlist = "list" in message_text
 
                     if is_playlist:
+                        # 首先获取视频信息
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(message_text, download=False)
                         total_videos = len(info["entries"])
                         success_count = 0
                         failed_videos = []
@@ -253,39 +251,32 @@ def register_handlers(client):
                                         info = ydl.extract_info(
                                             video_url, download=True
                                         )
+                                        video_id = info["id"]
                                         video_title = info["title"]
-                                        video_path = os.path.join(
-                                            YOUTUBE_TEMP_DIR,
-                                            f"{video_title}-{info['id']}.{info['ext']}",
-                                        )
 
-                                        # 移动文件到目标目录
-                                        os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
-                                        target_path = os.path.join(
-                                            YOUTUBE_DEST_DIR,
-                                            os.path.basename(video_path),
+                                        # 查找并移动文件
+                                        success, result = find_and_move_youtube_video(
+                                            video_id, video_title, info
                                         )
-                                        try:
-                                            shutil.move(video_path, target_path)
+                                        if success:
                                             success_count += 1
-                                            # 成功下载的消息需要保留，所以使用reply
                                             await event.reply(
                                                 f"✅ 播放列表 {playlist_title} 中的视频已下载并移动!\n"
                                                 f"序号: {index}/{total_videos}\n"
                                                 f"标题: {video_title}\n"
-                                                f"位置: {target_path}"
+                                                f"位置: {result}\n"
                                                 f"下载进度：{index}/{total_videos}\n"
                                                 f"成功：{success_count} 失败：{len(failed_videos)}"
                                             )
-                                        except Exception as move_error:
+                                        else:
                                             failed_videos.append(
-                                                f"下载完成但移动失败: {str(move_error)} {video_path} {target_path}"
+                                                f"视频 #{index} ({video_title}) - {result}"
                                             )
                                             await event.reply(
-                                                f"✅ 播放列表 {playlist_title} 中的视频下载完成但移动失败!\n"
+                                                f"⚠️ 播放列表 {playlist_title} 中的视频下载完成但移动失败!\n"
                                                 f"序号: {index}/{total_videos}\n"
                                                 f"标题: {video_title}\n"
-                                                f"位置: {target_path}"
+                                                f"错误: {result}\n"
                                                 f"下载进度：{index}/{total_videos}\n"
                                                 f"成功：{success_count} 失败：{len(failed_videos)}"
                                             )
@@ -358,27 +349,27 @@ def register_handlers(client):
 
                     else:
                         # 单个视频的处理
-                        # 首先获取视频信息
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                             info = ydl.extract_info(message_text, download=True)
+                            video_id = info["id"]
                             video_title = info["title"]
-                            video_path = os.path.join(
-                                YOUTUBE_TEMP_DIR,
-                                f"{video_title}-{info['id']}.{info['ext']}",
+
+                            # 查找并移动文件
+                            success, result = find_and_move_youtube_video(
+                                video_id, video_title, info
                             )
-
-                        # 移动文件到目标目录
-                        os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
-                        target_path = os.path.join(
-                            YOUTUBE_DEST_DIR, os.path.basename(video_path)
-                        )
-                        shutil.move(video_path, target_path)
-
-                        await event.reply(
-                            f"YouTube视频下载完成！\n"
-                            f"标题: {video_title}\n"
-                            f"位置: {target_path}"
-                        )
+                            if success:
+                                await event.reply(
+                                    f"✅ YouTube视频下载完成！\n"
+                                    f"标题: {video_title}\n"
+                                    f"位置: {result}"
+                                )
+                            else:
+                                await event.reply(
+                                    f"⚠️ YouTube视频下载完成但移动失败！\n"
+                                    f"标题: {video_title}\n"
+                                    f"错误: {result}"
+                                )
 
                     # 删除临时cookies文件
                     if YT_COOKIES and os.path.exists(temp_cookie_file):
@@ -520,6 +511,48 @@ async def shutdown():
         await client.disconnect()
     except Exception as e:
         logger.error(f"关闭客户端时出错: {str(e)}")
+
+
+# 配置yt-dlp
+def sanitize_filename(s):
+    # 移除或替换不安全的字符
+    s = re.sub(r'[<>:"/\\|?*]', "_", s)  # 替换Windows不允许的字符
+    s = re.sub(r"\s+", " ", s)  # 将多个空格替换为单个空格
+    s = s.strip()  # 移除首尾空格
+    return s
+
+
+def find_and_move_youtube_video(video_id, video_title, info):
+    """
+    在临时目录中查找并移动YouTube视频文件
+
+    Args:
+        video_id (str): YouTube视频ID
+        video_title (str): 视频标题
+        info (dict): 视频信息字典
+
+    Returns:
+        tuple: (是否成功, 目标路径或错误信息)
+    """
+    try:
+        # 遍历临时目录
+        for file in os.listdir(YOUTUBE_TEMP_DIR):
+            # 检查文件名中是否包含视频ID
+            if video_id in file and str(file).endswith(info["ext"]):
+                source_path = os.path.join(YOUTUBE_TEMP_DIR, file)
+                # 确保目标目录存在
+                os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
+                # 构建目标路径
+                target_path = os.path.join(
+                    YOUTUBE_DEST_DIR, f"{sanitize_filename(video_title)}.{info['ext']}"
+                )
+                # 移动文件
+                shutil.move(source_path, target_path)
+                return True, target_path
+
+        return False, f"未找到ID为{video_id}的视频文件"
+    except Exception as e:
+        return False, f"移动文件时出错: {str(e)}"
 
 
 def main():
