@@ -146,14 +146,13 @@ def register_handlers(client):
         status_message = None
         try:
             message_text = event.message.text if event.message.text else ""
-            status_message = await event.reply("开始解析youtube下载链接..")
-
             # 检查是否是YouTube链接
             youtube_pattern = r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/.*"
             is_youtube = bool(re.match(youtube_pattern, message_text))
 
             if is_youtube:
                 try:
+                    status_message = await event.reply("开始解析youtube下载链接..")
                     ydl_opts = {
                         "format": YT_FORMAT,
                         "outtmpl": os.path.join(
