@@ -270,7 +270,7 @@ def register_handlers(client):
                                             success_count += 1
                                             # 成功下载的消息需要保留，所以使用reply
                                             await event.reply(
-                                                f"✅ 播放列表 {playlist_title} 中的视频已下载并移动！\n"
+                                                f"✅ 播放列表 {playlist_title} 中的视频已下载并移动!\n"
                                                 f"序号: {index}/{total_videos}\n"
                                                 f"标题: {video_title}\n"
                                                 f"位置: {target_path}"
@@ -281,8 +281,13 @@ def register_handlers(client):
                                             failed_videos.append(
                                                 f"下载完成但移动失败: {str(move_error)} {video_path} {target_path}"
                                             )
-                                            await status_message.edit(
-                                                f"下载完成但移动失败: {str(move_error)} {video_path} {target_path}"
+                                            await event.reply(
+                                                f"✅ 播放列表 {playlist_title} 中的视频下载完成但移动失败!\n"
+                                                f"序号: {index}/{total_videos}\n"
+                                                f"标题: {video_title}\n"
+                                                f"位置: {target_path}"
+                                                f"下载进度：{index}/{total_videos}\n"
+                                                f"成功：{success_count} 失败：{len(failed_videos)}"
                                             )
 
                                     except Exception as download_error:
