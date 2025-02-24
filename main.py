@@ -146,15 +146,13 @@ def register_handlers(client):
         status_message = None
         try:
             message_text = event.message.text if event.message.text else ""
+            status_message = await event.reply("开始解析youtube下载链接..")
 
             # 检查是否是YouTube链接
             youtube_pattern = r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/.*"
             is_youtube = bool(re.match(youtube_pattern, message_text))
 
             if is_youtube:
-                # 发送下载开始的消息
-                status_message = await event.reply("开始下载YouTube视频...")
-
                 try:
                     # 配置yt-dlp
                     ydl_opts = {
@@ -162,6 +160,10 @@ def register_handlers(client):
                         "outtmpl": os.path.join(
                             YOUTUBE_TEMP_DIR, "%(title)s-%(id)s.%(ext)s"
                         ),
+                        # 忽略错误，继续下载
+                        "ignoreerrors": True,
+                        # 忽略下载错误，继续下载播放列表中的其他视频
+                        "ignore_no_formats_error": True,
                     }
 
                     # 添加代理配置
@@ -194,51 +196,193 @@ def register_handlers(client):
                                             f".youtube.com\tTRUE\t/\tTRUE\t2999999999\t{name.strip()}\t{value.strip()}\n"
                                         )
                         temp_cookie_file = f.name
-
                         ydl_opts["cookiefile"] = temp_cookie_file
 
+                    # 首先获取视频信息
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(message_text, download=True)
-                        video_title = info["title"]
-                        video_path = os.path.join(
-                            YOUTUBE_TEMP_DIR,
-                            f"{video_title}-{info['id']}.{info['ext']}",
+                        info = ydl.extract_info(message_text, download=False)
+
+                    # 判断是否是播放列表
+                    is_playlist = "entries" in info
+
+                    if is_playlist:
+                        total_videos = len(info["entries"])
+                        success_count = 0
+                        failed_videos = []
+                        playlist_title = info.get("title", "未知播放列表")
+                        await event.reply(
+                            f"检测到播放列表：{playlist_title}\n"
+                            f"共{total_videos}个视频，开始下载..."
+                        )
+
+                        # 下载播放列表中的每个视频
+                        for index, entry in enumerate(info["entries"], 1):
+                            if entry is None:
+                                error_msg = f"视频 #{index} 无法访问（可能是私密视频）"
+                                failed_videos.append(error_msg)
+                                await event.reply(
+                                    f"⚠️ 播放列表 {playlist_title} 中的视频无法访问\n"
+                                    f"序号: {index}/{total_videos}\n"
+                                    f"原因: 可能是私密视频"
+                                )
+                                continue
+
+                            try:
+                                video_url = entry.get("webpage_url") or entry.get("url")
+                                video_title = entry.get("title", "未知标题")
+                                if not video_url:
+                                    error_msg = (
+                                        f"视频 #{index} ({video_title}) URL获取失败"
+                                    )
+                                    failed_videos.append(error_msg)
+                                    await event.reply(
+                                        f"⚠️ 播放列表 {playlist_title} 中的视频URL获取失败\n"
+                                        f"序号: {index}/{total_videos}\n"
+                                        f"标题: {video_title}"
+                                    )
+                                    continue
+
+                                # 下载单个视频
+                                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                    # 发送下载开始的消息
+                                    await event.reply(
+                                        f"开始下载YouTube视频：{video_title}"
+                                    )
+                                    try:
+                                        info = ydl.extract_info(
+                                            video_url, download=True
+                                        )
+                                        video_title = info["title"]
+                                        video_path = os.path.join(
+                                            YOUTUBE_TEMP_DIR,
+                                            f"{video_title}-{info['id']}.{info['ext']}",
+                                        )
+
+                                        # 移动文件到目标目录
+                                        os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
+                                        target_path = os.path.join(
+                                            YOUTUBE_DEST_DIR,
+                                            os.path.basename(video_path),
+                                        )
+                                        try:
+                                            shutil.move(video_path, target_path)
+                                            success_count += 1
+                                            await event.reply(
+                                                f"✅ 播放列表 {playlist_title} 中的视频已下载并移动！\n"
+                                                f"序号: {index}/{total_videos}\n"
+                                                f"标题: {video_title}\n"
+                                                f"位置: {target_path}"
+                                            )
+                                        except Exception as move_error:
+                                            await event.reply(
+                                                f"下载完成但移动失败: {str(move_error)} {video_path} {target_path}"
+                                            )
+
+                                    except Exception as download_error:
+                                        error_msg = str(download_error)
+                                        if "No video formats found" in error_msg:
+                                            await event.reply(
+                                                f"⚠️ 播放列表 {playlist_title} 中的视频格式不可用\n"
+                                                f"序号: {index}/{total_videos}\n"
+                                                f"标题: {video_title}"
+                                            )
+                                            failed_videos.append(
+                                                f"视频 #{index} ({video_title}) - 格式不可用"
+                                            )
+                                        else:
+                                            failed_videos.append(
+                                                f"视频 #{index} ({video_title}) 下载失败: {error_msg[:100]}..."
+                                            )
+                                            await event.reply(
+                                                f"❌ 播放列表 {playlist_title} 中的视频下载失败\n"
+                                                f"序号: {index}/{total_videos}\n"
+                                                f"标题: {video_title}\n"
+                                                f"错误: {error_msg[:200]}..."
+                                            )
+                                        continue
+
+                                    # 更新状态消息
+                                    await event.reply(
+                                        f"播放列表：{playlist_title}\n"
+                                        f"视频名称：{video_title}\n"
+                                        f"下载进度：{index}/{total_videos}\n"
+                                        f"成功：{success_count} 失败：{len(failed_videos)}"
+                                    )
+
+                            except Exception as e:
+                                error_msg = str(e)
+                                if (
+                                    "Video unavailable" in error_msg
+                                    and "private" in error_msg
+                                ):
+                                    await event.reply(
+                                        f"⚠️ 播放列表 {playlist_title} 中的视频为私密视频\n"
+                                        f"序号: {index}/{total_videos}\n"
+                                        f"标题: {video_title}"
+                                    )
+                                    failed_videos.append(
+                                        f"视频 #{index} ({video_title}) - 私密视频"
+                                    )
+                                else:
+                                    failed_videos.append(
+                                        f"视频 #{index} ({video_title}) 下载失败: {error_msg[:100]}..."
+                                    )
+                                    await event.reply(
+                                        f"❌ 播放列表 {playlist_title} 中的视频下载失败\n"
+                                        f"序号: {index}/{total_videos}\n"
+                                        f"标题: {video_title}\n"
+                                        f"错误: {error_msg[:200]}..."
+                                    )
+
+                        # 播放列表下载完成后的总结
+                        summary = (
+                            f"📋 播放列表 {playlist_title} 下载完成！\n"
+                            f"总计：{total_videos}个视频\n"
+                            f"✅ 成功：{success_count}\n"
+                            f"❌ 失败：{len(failed_videos)}"
+                        )
+                        if failed_videos:
+                            summary += "\n\n失败视频列表："
+                            for fail in failed_videos[:10]:  # 只显示前10个失败
+                                summary += f"\n- {fail}"
+                            if len(failed_videos) > 10:
+                                summary += f"\n...等共{len(failed_videos)}个视频失败"
+                        summary += f"\n\n📂 保存位置: {YOUTUBE_DEST_DIR}"
+
+                        # 发送最终汇总消息
+                        await event.reply(summary)
+
+                    else:
+                        # 单个视频的处理
+                        # 首先获取视频信息
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(message_text, download=True)
+                            video_title = info["title"]
+                            video_path = os.path.join(
+                                YOUTUBE_TEMP_DIR,
+                                f"{video_title}-{info['id']}.{info['ext']}",
+                            )
+
+                        # 移动文件到目标目录
+                        os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
+                        target_path = os.path.join(
+                            YOUTUBE_DEST_DIR, os.path.basename(video_path)
+                        )
+                        shutil.move(video_path, target_path)
+
+                        await event.reply(
+                            f"YouTube视频下载完成！\n"
+                            f"标题: {video_title}\n"
+                            f"位置: {target_path}"
                         )
 
                     # 删除临时cookies文件
                     if YT_COOKIES and os.path.exists(temp_cookie_file):
                         os.unlink(temp_cookie_file)
 
-                    await status_message.edit(
-                        f"YouTube视频下载完成！\n"
-                        f"标题: {video_title}\n"
-                        f"格式: {YT_FORMAT}"
+                    logger.info(
+                        f"Successfully downloaded {'playlist' if is_playlist else 'video'}: {info.get('title', '')}"
                     )
-
-                    # 移动文件到目标目录
-                    try:
-                        os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
-                        target_path = os.path.join(
-                            YOUTUBE_DEST_DIR, os.path.basename(video_path)
-                        )
-                        shutil.move(video_path, target_path)
-                        logger.info(f"已将视频移动到: {target_path}")
-                        await status_message.edit(
-                            f"YouTube视频下载完成！\n"
-                            f"标题: {video_title}\n"
-                            f"位置: {target_path}"
-                        )
-                    except Exception as move_error:
-                        error_msg = f"视频已下载但移动失败: {str(move_error)}"
-                        logger.error(error_msg)
-                        await status_message.edit(
-                            f"YouTube视频下载完成，但移动失败！\n"
-                            f"标题: {video_title}\n"
-                            f"当前位置: {video_path}\n"
-                            f"移动错误: {str(move_error)}"
-                        )
-
-                    logger.info(f"Successfully downloaded YouTube video: {video_title}")
 
                 except Exception as e:
                     error_msg = str(e)
@@ -249,7 +393,7 @@ def register_handlers(client):
                         else f"YouTube视频下载失败: {error_msg}"
                     )
                     if status_message:
-                        await status_message.edit(error_message)
+                        await event.reply(error_message)
                     else:
                         await event.reply(error_message)
                     logger.error(f"YouTube download error: {error_msg}")
@@ -327,7 +471,7 @@ def register_handlers(client):
                             )
                             shutil.move(downloaded_file, target_path)
                             logger.info(f"已将{media_type}文件移动到: {target_path}")
-                            await status_message.edit(
+                            await event.reply(
                                 f"Telegram {media_type} 文件下载完成！\n"
                                 f"保存为: {os.path.basename(target_path)}\n"
                                 f"位置: {target_path}"
@@ -337,14 +481,14 @@ def register_handlers(client):
                                 f"{media_type}文件已下载但移动失败: {str(move_error)}"
                             )
                             logger.error(error_msg)
-                            await status_message.edit(
+                            await event.reply(
                                 f"Telegram {media_type} 文件下载完成，但移动失败！\n"
                                 f"文件名: {os.path.basename(downloaded_file)}\n"
                                 f"当前位置: {downloaded_file}\n"
                                 f"移动错误: {str(move_error)}"
                             )
                     else:
-                        await status_message.edit("下载失败！文件为空")
+                        await event.reply("下载失败！文件为空")
                         logger.error("Download failed: Empty file received")
 
                 except Exception as download_error:
@@ -352,7 +496,7 @@ def register_handlers(client):
                         f"Telegram {media_type} 文件下载失败: {str(download_error)}"
                     )
                     if status_message:
-                        await status_message.edit(error_msg)
+                        await event.reply(error_msg)
                     else:
                         await event.reply(error_msg)
                     logger.error(error_msg)
@@ -360,7 +504,7 @@ def register_handlers(client):
         except Exception as e:
             error_message = f"处理过程中出现错误: {str(e)}"
             if status_message:
-                await status_message.edit(error_message)
+                await event.reply(error_message)
             else:
                 await event.reply(error_message)
             logger.error(error_message)
