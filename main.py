@@ -20,7 +20,14 @@ CONFIG_DIR = os.path.join(BASE_DIR, "config")
 TEMP_DIR = os.path.join(BASE_DIR, "temp")  # 临时下载目录
 TELEGRAM_TEMP_DIR = os.path.join(TEMP_DIR, "telegram")
 YOUTUBE_TEMP_DIR = os.path.join(TEMP_DIR, "youtube")
+
+# Telegram媒体文件目录
 TELEGRAM_DEST_DIR = os.path.join(BASE_DIR, "downloads/telegram")
+TELEGRAM_VIDEOS_DIR = os.path.join(TELEGRAM_DEST_DIR, "videos")
+TELEGRAM_AUDIOS_DIR = os.path.join(TELEGRAM_DEST_DIR, "audios")
+TELEGRAM_PHOTOS_DIR = os.path.join(TELEGRAM_DEST_DIR, "photos")
+TELEGRAM_OTHERS_DIR = os.path.join(TELEGRAM_DEST_DIR, "others")
+
 YOUTUBE_DEST_DIR = os.path.join(BASE_DIR, "downloads/youtube")
 
 
@@ -249,8 +256,59 @@ def register_handlers(client):
 
             # 处理Telegram视频
             elif event.message.media:
-                filename = event.message.message or "未命名视频"
-                status_message = await event.reply(f"开始下载Telegram视频...{filename}")
+                media = event.message.media
+
+                # 获取文件名
+                filename = None
+                if hasattr(media, "document"):
+                    # 从文档属性中获取文件名
+                    for attr in media.document.attributes:
+                        if hasattr(attr, "title") and attr.title:
+                            filename = attr.title
+                            break
+
+                    # 如果属性中没有文件名，尝试从MIME类型生成
+                    if not filename and hasattr(media.document, "mime_type"):
+                        mime_type = media.document.mime_type
+                        ext = mime_type.split("/")[-1] if mime_type else "unknown"
+                        filename = f"未命名文件.{ext}"
+
+                # 如果是照片，生成时间戳文件名
+                elif hasattr(media, "photo"):
+                    from datetime import datetime
+
+                    filename = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+
+                # 如果以上都没有获取到文件名，使用消息文本或默认名称
+                if not filename:
+                    filename = event.message.message or "未命名文件"
+
+                # 确定媒体类型和目标目录
+                if hasattr(media, "document"):
+                    mime_type = media.document.mime_type
+                    if mime_type:
+                        if mime_type.startswith("video/"):
+                            media_type = "video"
+                            target_dir = TELEGRAM_VIDEOS_DIR
+                        elif mime_type.startswith("audio/"):
+                            media_type = "audio"
+                            target_dir = TELEGRAM_AUDIOS_DIR
+                        else:
+                            media_type = "other"
+                            target_dir = TELEGRAM_OTHERS_DIR
+                    else:
+                        media_type = "other"
+                        target_dir = TELEGRAM_OTHERS_DIR
+                elif hasattr(media, "photo"):
+                    media_type = "photo"
+                    target_dir = TELEGRAM_PHOTOS_DIR
+                else:
+                    media_type = "other"
+                    target_dir = TELEGRAM_OTHERS_DIR
+
+                status_message = await event.reply(
+                    f"开始下载 {media_type} 文件...{filename}"
+                )
 
                 try:
                     # 下载文件
@@ -263,22 +321,24 @@ def register_handlers(client):
 
                     if downloaded_file:
                         try:
-                            os.makedirs(TELEGRAM_DEST_DIR, exist_ok=True)
+                            os.makedirs(target_dir, exist_ok=True)
                             target_path = os.path.join(
-                                TELEGRAM_DEST_DIR, os.path.basename(downloaded_file)
+                                target_dir, os.path.basename(downloaded_file)
                             )
                             shutil.move(downloaded_file, target_path)
-                            logger.info(f"已将视频移动到: {target_path}")
+                            logger.info(f"已将{media_type}文件移动到: {target_path}")
                             await status_message.edit(
-                                f"Telegram视频下载完成！\n"
+                                f"Telegram {media_type} 文件下载完成！\n"
                                 f"保存为: {os.path.basename(target_path)}\n"
                                 f"位置: {target_path}"
                             )
                         except Exception as move_error:
-                            error_msg = f"视频已下载但移动失败: {str(move_error)}"
+                            error_msg = (
+                                f"{media_type}文件已下载但移动失败: {str(move_error)}"
+                            )
                             logger.error(error_msg)
                             await status_message.edit(
-                                f"Telegram视频下载完成，但移动失败！\n"
+                                f"Telegram {media_type} 文件下载完成，但移动失败！\n"
                                 f"文件名: {os.path.basename(downloaded_file)}\n"
                                 f"当前位置: {downloaded_file}\n"
                                 f"移动错误: {str(move_error)}"
@@ -288,7 +348,9 @@ def register_handlers(client):
                         logger.error("Download failed: Empty file received")
 
                 except Exception as download_error:
-                    error_msg = f"Telegram视频下载失败: {str(download_error)}"
+                    error_msg = (
+                        f"Telegram {media_type} 文件下载失败: {str(download_error)}"
+                    )
                     if status_message:
                         await status_message.edit(error_msg)
                     else:
@@ -322,7 +384,10 @@ def main():
         # 创建所有必要的目录
         os.makedirs(TELEGRAM_TEMP_DIR, exist_ok=True)
         os.makedirs(YOUTUBE_TEMP_DIR, exist_ok=True)
-        os.makedirs(TELEGRAM_DEST_DIR, exist_ok=True)
+        os.makedirs(TELEGRAM_VIDEOS_DIR, exist_ok=True)
+        os.makedirs(TELEGRAM_AUDIOS_DIR, exist_ok=True)
+        os.makedirs(TELEGRAM_PHOTOS_DIR, exist_ok=True)
+        os.makedirs(TELEGRAM_OTHERS_DIR, exist_ok=True)
         os.makedirs(YOUTUBE_DEST_DIR, exist_ok=True)
 
         # 设置日志级别
