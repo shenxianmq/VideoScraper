@@ -1,0 +1,8 @@
+.DS_Store
+bot_session.session
+bot_session.session-journal
+config.yaml.example
+*.pyc
+downloads/
+temp/
+config/

@@ -1,0 +1,9 @@
+pyaes==1.6.1
+pyasn1==0.6.1
+python-socks==2.7.1
+PyYAML==6.0.2
+rsa==4.9
+setuptools==75.8.0
+Telethon==1.39.0
+wheel==0.45.1
+yt-dlp==2025.2.19
