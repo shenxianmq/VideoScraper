@@ -210,7 +210,7 @@ def register_handlers(client):
                         success_count = 0
                         failed_videos = []
                         playlist_title = info.get("title", "未知播放列表")
-                        await event.reply(
+                        await status_message.edit(
                             f"检测到播放列表：{playlist_title}\n"
                             f"共{total_videos}个视频，开始下载..."
                         )
@@ -220,7 +220,7 @@ def register_handlers(client):
                             if entry is None:
                                 error_msg = f"视频 #{index} 无法访问（可能是私密视频）"
                                 failed_videos.append(error_msg)
-                                await event.reply(
+                                await status_message.edit(
                                     f"⚠️ 播放列表 {playlist_title} 中的视频无法访问\n"
                                     f"序号: {index}/{total_videos}\n"
                                     f"原因: 可能是私密视频"
@@ -235,7 +235,7 @@ def register_handlers(client):
                                         f"视频 #{index} ({video_title}) URL获取失败"
                                     )
                                     failed_videos.append(error_msg)
-                                    await event.reply(
+                                    await status_message.edit(
                                         f"⚠️ 播放列表 {playlist_title} 中的视频URL获取失败\n"
                                         f"序号: {index}/{total_videos}\n"
                                         f"标题: {video_title}"
@@ -244,9 +244,10 @@ def register_handlers(client):
 
                                 # 下载单个视频
                                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                                    # 发送下载开始的消息
+                                    # 更新下载开始的消息
                                     await event.reply(
-                                        f"开始下载YouTube视频：{video_title}"
+                                        f"开始下载YouTube视频：{video_title}\n"
+                                        f"序号: {index}/{total_videos}"
                                     )
                                     try:
                                         info = ydl.extract_info(
@@ -267,21 +268,27 @@ def register_handlers(client):
                                         try:
                                             shutil.move(video_path, target_path)
                                             success_count += 1
+                                            # 成功下载的消息需要保留，所以使用reply
                                             await event.reply(
                                                 f"✅ 播放列表 {playlist_title} 中的视频已下载并移动！\n"
                                                 f"序号: {index}/{total_videos}\n"
                                                 f"标题: {video_title}\n"
                                                 f"位置: {target_path}"
+                                                f"下载进度：{index}/{total_videos}\n"
+                                                f"成功：{success_count} 失败：{len(failed_videos)}"
                                             )
                                         except Exception as move_error:
-                                            await event.reply(
+                                            failed_videos.append(
+                                                f"下载完成但移动失败: {str(move_error)} {video_path} {target_path}"
+                                            )
+                                            await status_message.edit(
                                                 f"下载完成但移动失败: {str(move_error)} {video_path} {target_path}"
                                             )
 
                                     except Exception as download_error:
                                         error_msg = str(download_error)
                                         if "No video formats found" in error_msg:
-                                            await event.reply(
+                                            await status_message.edit(
                                                 f"⚠️ 播放列表 {playlist_title} 中的视频格式不可用\n"
                                                 f"序号: {index}/{total_videos}\n"
                                                 f"标题: {video_title}"
@@ -293,7 +300,7 @@ def register_handlers(client):
                                             failed_videos.append(
                                                 f"视频 #{index} ({video_title}) 下载失败: {error_msg[:100]}..."
                                             )
-                                            await event.reply(
+                                            await status_message.edit(
                                                 f"❌ 播放列表 {playlist_title} 中的视频下载失败\n"
                                                 f"序号: {index}/{total_videos}\n"
                                                 f"标题: {video_title}\n"
@@ -301,21 +308,13 @@ def register_handlers(client):
                                             )
                                         continue
 
-                                    # 更新状态消息
-                                    await event.reply(
-                                        f"播放列表：{playlist_title}\n"
-                                        f"视频名称：{video_title}\n"
-                                        f"下载进度：{index}/{total_videos}\n"
-                                        f"成功：{success_count} 失败：{len(failed_videos)}"
-                                    )
-
                             except Exception as e:
                                 error_msg = str(e)
                                 if (
                                     "Video unavailable" in error_msg
                                     and "private" in error_msg
                                 ):
-                                    await event.reply(
+                                    await status_message.edit(
                                         f"⚠️ 播放列表 {playlist_title} 中的视频为私密视频\n"
                                         f"序号: {index}/{total_videos}\n"
                                         f"标题: {video_title}"
@@ -327,7 +326,7 @@ def register_handlers(client):
                                     failed_videos.append(
                                         f"视频 #{index} ({video_title}) 下载失败: {error_msg[:100]}..."
                                     )
-                                    await event.reply(
+                                    await status_message.edit(
                                         f"❌ 播放列表 {playlist_title} 中的视频下载失败\n"
                                         f"序号: {index}/{total_videos}\n"
                                         f"标题: {video_title}\n"
@@ -350,7 +349,7 @@ def register_handlers(client):
                         summary += f"\n\n📂 保存位置: {YOUTUBE_DEST_DIR}"
 
                         # 发送最终汇总消息
-                        await event.reply(summary)
+                        await status_message.edit(summary)
 
                     else:
                         # 单个视频的处理
