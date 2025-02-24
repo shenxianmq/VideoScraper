@@ -197,7 +197,9 @@ def register_handlers(client):
                         ydl_opts["cookiefile"] = temp_cookie_file
 
                     # 判断是否是播放列表
-                    is_playlist = "list" in message_text
+                    is_playlist = "list" in message_text or message_text.endswith(
+                        "/videos"
+                    )
 
                     if is_playlist:
                         # 首先获取视频信息
