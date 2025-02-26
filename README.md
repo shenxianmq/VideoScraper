@@ -46,6 +46,21 @@ pip install -r requirements.txt
 1. 使用 docker-compose：
 
 ```bash
+version: '3'
+services:
+  video_scraper:
+    image: shenxianmq/video_scraper:latest
+    volumes:
+      - ./config:/app/config
+      - ./downloads/telegram:/app/downloads/telegram
+      - ./downloads/youtube:/app/downloads/youtube
+      - ./downloads/temp:/app/temp
+
+    restart: unless-stopped
+    container_name: video_scraper
+    environment:
+      - TZ=Asia/Shanghai
+
 # 拉取并启动容器
 docker-compose up -d
 
