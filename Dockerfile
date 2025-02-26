@@ -5,6 +5,7 @@ WORKDIR /app
 
 # 复制项目文件
 COPY main.py .
+COPY init.py
 COPY entrypoint.sh .
 
 # 创建必要的目录（使用绝对路径）
