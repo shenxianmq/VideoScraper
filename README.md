@@ -60,14 +60,23 @@ services:
     container_name: video_scraper
     environment:
       - TZ=Asia/Shanghai
+```
 
+```bash
 # 拉取并启动容器
+
 docker-compose up -d
+```
 
+```bash
 # 进入容器进行初始化配置
-docker exec -it video_scraper python /app/init.py
 
+docker exec -it video_scraper python /app/init.py
+```
+
+```bash
 # 按提示输入验证码后，重启容器使配置生效
+
 docker restart video_scraper
 ```
 
