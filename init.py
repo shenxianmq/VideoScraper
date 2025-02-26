@@ -77,7 +77,7 @@ async def generate_session():
         )
 
         logger.info("开始生成 session 文件...")
-        logger.info("请按照提示输入手机号和验证码")
+        logger.info("请按照提示输入验证码")
 
         # 启动客户端
         await client.start(phone=phone)
