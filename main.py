@@ -42,6 +42,7 @@ def load_config():
         "api_id": "",
         "api_hash": "",
         "user_account": {
+            "enabled": False,
             "phone": "",  # 用户的手机号
             "session_name": "user_session",  # 用户会话名称
         },
@@ -673,7 +674,6 @@ async def main():
                 session_path, config["api_id"], config["api_hash"], proxy=proxy
             )
             clients.append(user_client)
-
             # 启动用户客户端
             phone = user_config.get("phone", "")
             await user_client.start(phone=phone)
