@@ -5,6 +5,10 @@ import yaml
 import yt_dlp
 import re
 import shutil
+import asyncio
+import signal
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # 配置日志
 logging.basicConfig(
@@ -35,13 +39,27 @@ YOUTUBE_DEST_DIR = os.path.join(BASE_DIR, "downloads/youtube")
 def load_config():
     config_file = os.path.join(CONFIG_DIR, "config.yaml")
     default_config = {
-        "telegram_token": "",
         "api_id": "",
         "api_hash": "",
+        "user_account": {
+            "phone": "",  # 用户的手机号
+            "session_name": "user_session",  # 用户会话名称
+        },
+        "bot_account": {
+            "token": "",  # 机器人 token
+            "session_name": "bot_session",  # 机器人会话名称
+        },
         "youtube_download": {
             "format": "best",
             "cookies": "",
         },
+        "scheduled_messages": [
+            {
+                "chat_id": "",  # 目标群组/频道的ID或用户名
+                "message": "",  # 要发送的消息
+                "time": "08:00",  # 每天发送消息的时间，24小时制
+            }
+        ],
         "log_level": "INFO",
         "proxy": {
             "enabled": False,
@@ -76,14 +94,19 @@ def load_config():
             logger.warning(
                 f"配置文件 {config_file} 不存在，已创建默认配置文件。\n"
                 "请编辑配置文件，填入必要的信息：\n"
-                "1. telegram_token: 你的Telegram Bot Token\n"
-                "2. youtube_download.cookies: YouTube cookies"
+                "1. api_id: 你的API ID\n"
+                "2. api_hash: 你的API Hash\n"
+                "3. bot_account.token: 机器人Token\n"
+                "4. youtube_download.cookies: YouTube cookies（可选）"
             )
             raise ValueError("请先配置 config/config.yaml 文件")
 
         # 验证必要的配置项
-        if not config.get("telegram_token"):
-            raise ValueError("请在 config.yaml 中配置 telegram_token")
+        if not config.get("api_id") or not config.get("api_hash"):
+            raise ValueError("请在 config.yaml 中配置 api_id 和 api_hash")
+
+        if not config.get("bot_account", {}).get("token"):
+            raise ValueError("请在 config.yaml 中配置 bot_account.token")
 
         return config
 
@@ -97,7 +120,7 @@ config = load_config()
 # Telegram API 配置
 API_ID = config.get("api_id", "")
 API_HASH = config.get("api_hash", "")
-BOT_TOKEN = config["telegram_token"]
+BOT_TOKEN = config["bot_account"]["token"]
 
 # 下载目录配置
 BASE_DOWNLOAD_DIR = config.get("download_dir", "downloads")
@@ -506,14 +529,6 @@ def register_handlers(client):
             logger.error(error_message)
 
 
-async def shutdown():
-    """优雅关闭客户端"""
-    try:
-        await client.disconnect()
-    except Exception as e:
-        logger.error(f"关闭客户端时出错: {str(e)}")
-
-
 # 配置yt-dlp
 def sanitize_filename(s):
     # 移除或替换不安全的字符
@@ -556,8 +571,62 @@ def find_and_move_youtube_video(video_id, video_title, info):
         return False, f"移动文件时出错: {str(e)}"
 
 
-def main():
-    """启动机器人"""
+async def send_scheduled_message(client, chat_id, message):
+    """发送定时消息"""
+    try:
+        await client.send_message(chat_id, message)
+        logger.info(f"成功发送消息到 {chat_id}")
+    except Exception as e:
+        logger.error(f"发送消息到 {chat_id} 失败: {str(e)}")
+
+
+def initialize_scheduler(client, scheduled_messages):
+    """初始化定时任务"""
+    scheduler = AsyncIOScheduler()
+
+    if not scheduled_messages:
+        logger.info("没有配置定时消息任务")
+        return scheduler
+
+    # 添加所有定时任务
+    for idx, task in enumerate(scheduled_messages):
+        try:
+            chat_id = task.get("chat_id")
+            message = task.get("message")
+            schedule_time = task.get("time", "08:00")  # 默认早上8点
+
+            if not chat_id or not message:
+                logger.warning(f"定时任务 #{idx+1} 缺少必要的参数 (chat_id 或 message)")
+                continue
+
+            # 解析时间
+            try:
+                hour, minute = map(int, schedule_time.split(":"))
+            except ValueError:
+                logger.error(f"定时任务 #{idx+1} 的时间格式错误: {schedule_time}")
+                continue
+
+            # 创建定时任务
+            scheduler.add_job(
+                send_scheduled_message,
+                CronTrigger(hour=hour, minute=minute),
+                args=[client, chat_id, message],
+                id=f"message_{idx}",
+                replace_existing=True,
+            )
+
+            logger.info(
+                f"已添加定时任务 #{idx+1}: 发送到 {chat_id}, 每天 {schedule_time}"
+            )
+
+        except Exception as e:
+            logger.error(f"添加定时任务 #{idx+1} 失败: {str(e)}")
+
+    return scheduler
+
+
+async def main():
+    """同时启动机器人和用户账号"""
     try:
         # 加载配置
         global config
@@ -575,63 +644,109 @@ def main():
         # 设置日志级别
         logging.getLogger().setLevel(config.get("log_level", "INFO"))
 
-        logger.info("开始启动 Telegram Bot...")
+        # 创建客户端列表
+        global clients
+        clients = []
 
-        # 创建客户端
-        global client
+        # 配置代理
+        proxy = None
         proxy_config = config.get("proxy", {})
         if (
             proxy_config.get("enabled")
             and proxy_config.get("host")
             and proxy_config.get("port")
         ):
-            client = TelegramClient(
-                "bot_session",
-                config["api_id"],
-                config["api_hash"],
-                proxy={
-                    "proxy_type": "socks5",
-                    "addr": proxy_config["host"],
-                    "port": proxy_config["port"],
-                },
+            proxy = {
+                "proxy_type": "socks5",
+                "addr": proxy_config["host"],
+                "port": proxy_config["port"],
+            }
+
+        # 创建并启动用户客户端
+        user_config = config.get("user_account", {})
+        if user_config.get("enabled", False):
+            logger.info("正在启动用户账号客户端...")
+            session_name = user_config.get("session_name", "user_session")
+            session_path = os.path.join(CONFIG_DIR, session_name)
+
+            user_client = TelegramClient(
+                session_path, config["api_id"], config["api_hash"], proxy=proxy
             )
-        else:
-            client = TelegramClient("bot_session", config["api_id"], config["api_hash"])
+            clients.append(user_client)
+
+            # 启动用户客户端
+            phone = user_config.get("phone", "")
+            await user_client.start(phone=phone)
+            logger.info(f"用户账号 {phone} 登录成功！")
+
+            # 初始化定时任务
+            scheduler = initialize_scheduler(
+                user_client, config.get("scheduled_messages", [])
+            )
+            scheduler.start()
+
+        # 创建并启动机器人客户端
+        bot_config = config.get("bot_account", {})
+        if bot_config.get("token"):
+            logger.info("正在启动机器人客户端...")
+            session_name = bot_config.get("session_name", "bot_session")
+            session_path = os.path.join(CONFIG_DIR, session_name)
+
+            bot_client = TelegramClient(
+                session_path, config["api_id"], config["api_hash"], proxy=proxy
+            )
+            clients.append(bot_client)
+
+            # 启动机器人客户端
+            await bot_client.start(bot_token=bot_config["token"])
+            logger.info("机器人启动成功！")
+
+            # 为机器人注册下载处理器
+            register_handlers(bot_client)
+
+        if not clients:
+            raise ValueError("未启用任何客户端，请在配置文件中至少启用一个客户端")
 
         # 设置信号处理
-        import signal
-        import asyncio
+        loop = asyncio.get_event_loop()
 
-        def signal_handler():
-            """处理终止信号"""
-            logger.info("收到终止信号，正在关闭...")
-            asyncio.create_task(shutdown())
+        async def shutdown(signal_=None):
+            """优雅关闭"""
+            if signal_:
+                logger.info(f"收到信号 {signal_.name}...")
+            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            [task.cancel() for task in tasks]
+            logger.info(f"取消 {len(tasks)} 个待处理的任务")
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-        client.loop.add_signal_handler(signal.SIGINT, signal_handler)
-        client.loop.add_signal_handler(signal.SIGTERM, signal_handler)
+            # 关闭所有客户端
+            for client in clients:
+                await client.disconnect()
 
-        # 注册事件处理器
-        register_handlers(client)
+            # 关闭调度器
+            if "scheduler" in locals() and scheduler.running:
+                scheduler.shutdown()
 
-        # 启动客户端
-        client.start(bot_token=config["telegram_token"])
+            loop.stop()
 
-        # 运行客户端
-        client.run_until_disconnected()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
 
-    except ValueError as e:
-        logger.error(str(e))
-        logger.info("程序退出")
-        exit(1)
+        # 运行所有客户端
+        await asyncio.gather(*[client.run_until_disconnected() for client in clients])
+
     except Exception as e:
         logger.error(f"程序运行出错: {str(e)}")
-        logger.info("程序退出")
-        exit(1)
+        raise
     finally:
-        # 确保在退出时清理
-        if "client" in globals() and client.is_connected():
-            client.loop.run_until_complete(shutdown())
+        # 确保清理资源
+        await shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("程序被用户中断")
+    except Exception as e:
+        logger.error(f"程序异常退出: {str(e)}")
