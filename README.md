@@ -57,9 +57,20 @@ youtube_download:
 
 # 定时消息配置
 scheduled_messages:
-  - chat_id: "@group_username" # 群组用户名或ID
-    message: "这是定时消息内容"
+  # 发送到群组的示例
+  - chat_id: "@group_username" # 群组用户名
+    message: "这是发送到群组的消息"
     time: "08:00" # 每天发送时间（24小时制）
+
+  # 发送到机器人的示例
+  - chat_id: "@bot_username" # 机器人用户名
+    message: "这是发送给机器人的消息"
+    time: "09:00"
+
+  # 使用数字ID发送的示例
+  - chat_id: "123456789" # 群组/频道/用户的数字ID
+    message: "这是使用数字ID发送的消息"
+    time: "10:00"
 
 # 代理配置
 proxy:
