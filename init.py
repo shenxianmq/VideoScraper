@@ -86,6 +86,7 @@ async def generate_session():
         if await client.is_user_authorized():
             logger.info(f"✅ Session 文件生成成功！")
             logger.info(f"📁 文件保存在: {session_path}.session")
+            logger.info("请重新启动容器.")
 
         # 断开连接
         await client.disconnect()

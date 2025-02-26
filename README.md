@@ -40,7 +40,7 @@ docker run -d \
 docker exec -it telegram-scheduler /bin/bash
 
 # 运行 session 生成脚本
-python generate_session.py
+python init.py
 
 # 按照提示输入手机号和验证码
 # 完成后 session 文件会保存在 config 目录
