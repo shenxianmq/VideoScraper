@@ -602,7 +602,7 @@ def initialize_scheduler(client, scheduled_messages):
 
             # 解析时间
             try:
-                hour, minute = map(int, schedule_time.split(":"))
+                hour, minute = map(int, str(schedule_time).split(":"))
             except ValueError:
                 logger.error(f"定时任务 #{idx+1} 的时间格式错误: {schedule_time}")
                 continue
